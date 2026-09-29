@@ -10,7 +10,10 @@ local localPlayer = players.LocalPlayer
 
 if _G.__grycan_loaded then
     local pg = localPlayer:FindFirstChild("PlayerGui")
-    if pg and pg:FindFirstChild("grycan") then warn("grycan ai already running") return end
+    if pg then
+        local old = pg:FindFirstChild("grycan")
+        if old then old:Destroy() end
+    end
     _G.__grycan_loaded = false
     _G.__grycan_unload = nil
 end
@@ -19,7 +22,7 @@ _G.__grycan_loaded = true
 local http = (syn and syn.request) or (http and http.request) or http_request or request
 if not http then _G.__grycan_loaded = false warn("no http executor") return end
 
-local VERSION = "v0.3 beta"
+local VERSION = "v0.1 beta"
 
 local iconId = "rbxthumb://type=Asset&id=79985085633622&w=150&h=150"
 local discordLink = "https://discord.gg/3MpTfDpSZ6"
@@ -271,7 +274,78 @@ local function setCam(on)
     end
 end
 
+local function lerpNumberSeq(a, b, t)
+    local out = {}
+    local kpsA, kpsB = a.Keypoints, b.Keypoints
+    local n = math.min(#kpsA, #kpsB)
+    for i = 1, n do
+        local ka, kb = kpsA[i], kpsB[i]
+        table.insert(out, NumberSequenceKeypoint.new(
+            ka.Time,
+            ka.Value + (kb.Value - ka.Value) * t,
+            ka.Envelope + (kb.Envelope - ka.Envelope) * t
+        ))
+    end
+    return NumberSequence.new(out)
+end
+
+local function lerpColorSeq(a, b, t)
+    local out = {}
+    local kpsA, kpsB = a.Keypoints, b.Keypoints
+    local n = math.min(#kpsA, #kpsB)
+    for i = 1, n do
+        local ka, kb = kpsA[i], kpsB[i]
+        table.insert(out, ColorSequenceKeypoint.new(ka.Time, ka.Value:Lerp(kb.Value, t)))
+    end
+    return ColorSequence.new(out)
+end
+
+local function tweenNumSeq(obj, target, dur)
+    task.spawn(function()
+        local startSeq = obj.Transparency
+        local steps = math.max(6, math.floor(dur * 40))
+        for i = 1, steps do
+            if unloaded or not obj.Parent then return end
+            local t = i / steps
+            local et = 1 - math.pow(1 - t, 3)
+            obj.Transparency = lerpNumberSeq(startSeq, target, et)
+            task.wait(dur / steps)
+        end
+        if not unloaded and obj.Parent then obj.Transparency = target end
+    end)
+end
+
+local function tweenColorSeq(obj, target, dur)
+    task.spawn(function()
+        local startSeq = obj.Color
+        local steps = math.max(8, math.floor(dur * 40))
+        for i = 1, steps do
+            if unloaded or not obj.Parent then return end
+            local t = i / steps
+            local et = 1 - math.pow(1 - t, 3)
+            obj.Color = lerpColorSeq(startSeq, target, et)
+            task.wait(dur / steps)
+        end
+        if not unloaded and obj.Parent then obj.Color = target end
+    end)
+end
+
+-- bulletproof tw: routes UIGradient Color/Transparency to manual sequence tweeners
 local function tw(o, p, t, style, dir)
+    if o:IsA("UIGradient") then
+        if p.Color ~= nil then tweenColorSeq(o, p.Color, t or 0.24) end
+        if p.Transparency ~= nil then tweenNumSeq(o, p.Transparency, t or 0.24) end
+        local rest = {}
+        for k, v in pairs(p) do
+            if k ~= "Color" and k ~= "Transparency" then rest[k] = v end
+        end
+        if next(rest) then
+            local t2 = tweenService:Create(o, TweenInfo.new(t or 0.24, style or Enum.EasingStyle.Quart, dir or Enum.EasingDirection.Out), rest)
+            t2:Play()
+            return t2
+        end
+        return nil
+    end
     local t2 = tweenService:Create(o, TweenInfo.new(t or 0.24, style or Enum.EasingStyle.Quart, dir or Enum.EasingDirection.Out), p)
     t2:Play()
     return t2
@@ -338,9 +412,7 @@ local function applyAccentToAll()
     for _, listener in ipairs(accentListeners) do
         if listener.obj and listener.obj.Parent then
             if listener.use == "grad" then
-                tweenService:Create(listener.obj, TweenInfo.new(0.6, Enum.EasingStyle.Quart), {
-                    Color = ColorSequence.new(t.accentHi, t.accent)
-                }):Play()
+                tweenColorSeq(listener.obj, ColorSequence.new(t.accentHi, t.accent), 0.6)
             else
                 local target = (listener.use == "hi") and t.accentHi or t.accent
                 tweenService:Create(listener.obj, TweenInfo.new(0.6, Enum.EasingStyle.Quart), {[listener.prop] = target}):Play()
@@ -436,21 +508,21 @@ local function glassButton(parent, height, order)
     sGrad.Rotation = 90
     track(b.MouseEnter:Connect(function()
         if b:GetAttribute("pressed") then return end
-        tw(grad, {Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.78), NumberSequenceKeypoint.new(1, 0.88)})}, 0.22)
-        tw(sGrad, {Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.35), NumberSequenceKeypoint.new(1, 0.7)})}, 0.22)
+        tweenNumSeq(grad, NumberSequence.new({NumberSequenceKeypoint.new(0, 0.78), NumberSequenceKeypoint.new(1, 0.88)}), 0.22)
+        tweenNumSeq(sGrad, NumberSequence.new({NumberSequenceKeypoint.new(0, 0.35), NumberSequenceKeypoint.new(1, 0.7)}), 0.22)
     end))
     track(b.MouseLeave:Connect(function()
         b:SetAttribute("pressed", false)
-        tw(grad, {Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.85), NumberSequenceKeypoint.new(1, 0.93)})}, 0.26)
-        tw(sGrad, {Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.5), NumberSequenceKeypoint.new(1, 0.82)})}, 0.26)
+        tweenNumSeq(grad, NumberSequence.new({NumberSequenceKeypoint.new(0, 0.85), NumberSequenceKeypoint.new(1, 0.93)}), 0.26)
+        tweenNumSeq(sGrad, NumberSequence.new({NumberSequenceKeypoint.new(0, 0.5), NumberSequenceKeypoint.new(1, 0.82)}), 0.26)
     end))
     track(b.MouseButton1Down:Connect(function()
         b:SetAttribute("pressed", true)
-        tw(grad, {Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.72), NumberSequenceKeypoint.new(1, 0.84)})}, 0.1)
+        tweenNumSeq(grad, NumberSequence.new({NumberSequenceKeypoint.new(0, 0.72), NumberSequenceKeypoint.new(1, 0.84)}), 0.1)
     end))
     track(b.MouseButton1Up:Connect(function()
         b:SetAttribute("pressed", false)
-        tw(grad, {Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.78), NumberSequenceKeypoint.new(1, 0.88)})}, 0.14)
+        tweenNumSeq(grad, NumberSequence.new({NumberSequenceKeypoint.new(0, 0.78), NumberSequenceKeypoint.new(1, 0.88)}), 0.14)
     end))
     return b
 end
@@ -499,8 +571,170 @@ end
 local function clearModels()
     if not U.modelListFrame then return end
     for _, c in ipairs(U.modelListFrame:GetChildren()) do
-        if c:IsA("TextButton") then c:Destroy() end
+        if not c:IsA("UIListLayout") then c:Destroy() end
     end
+end
+
+local function makeSpinner(parent, size, color)
+    local wrap = Instance.new("Frame", parent)
+    wrap.BackgroundTransparency = 1
+    wrap.Size = UDim2.new(0, size, 0, size)
+    wrap.ZIndex = 8
+    wrap.Name = "_spinner"
+
+    local ring = Instance.new("Frame", wrap)
+    ring.BackgroundTransparency = 1
+    ring.Size = UDim2.new(1, 0, 1, 0)
+    ring.ZIndex = 8
+
+    local dot = Instance.new("Frame", ring)
+    dot.BackgroundColor3 = color
+    dot.BorderSizePixel = 0
+    dot.Size = UDim2.new(0, math.floor(size * 0.18), 0, math.floor(size * 0.18))
+    dot.AnchorPoint = Vector2.new(0.5, 0.5)
+    dot.ZIndex = 9
+    Instance.new("UICorner", dot).CornerRadius = UDim.new(1, 0)
+
+    local function step(angle)
+        if unloaded or not wrap.Parent then return end
+        local r = (size - dot.AbsoluteSize.X) * 0.5
+        local rad = math.rad(angle)
+        dot.Position = UDim2.new(0.5, math.cos(rad) * r, 0.5, math.sin(rad) * r)
+    end
+
+    task.spawn(function()
+        local a = 0
+        while not unloaded and wrap.Parent do
+            step(a)
+            a = a + 18
+            task.wait(0.03)
+        end
+    end)
+
+    return wrap
+end
+
+local function buildEmptyState(opts)
+    clearModels()
+    local frame = U.modelListFrame
+
+    local card = Instance.new("Frame", frame)
+    card.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    card.BackgroundTransparency = 0.93
+    card.BorderSizePixel = 0
+    card.Size = UDim2.new(1, 0, 0, 152)
+    card.LayoutOrder = 1
+    card.ZIndex = 6
+    Instance.new("UICorner", card).CornerRadius = UDim.new(0, 10)
+    local st = Instance.new("UIStroke", card)
+    st.Color = Color3.fromRGB(255, 255, 255)
+    st.Thickness = 1
+    st.Transparency = 0.7
+    local grad = Instance.new("UIGradient", card)
+    grad.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(210, 215, 228))
+    grad.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.88),
+        NumberSequenceKeypoint.new(1, 0.95),
+    })
+    grad.Rotation = 90
+
+    local iconHolder = Instance.new("Frame", card)
+    iconHolder.BackgroundTransparency = 1
+    iconHolder.Size = UDim2.new(0, 40, 0, 40)
+    iconHolder.Position = UDim2.new(0.5, -20, 0, 16)
+    iconHolder.ZIndex = 7
+    Instance.new("UICorner", iconHolder).CornerRadius = UDim.new(1, 0)
+
+    local iconBg = Instance.new("Frame", iconHolder)
+    iconBg.BackgroundColor3 = opts.iconColor or C.textDim
+    iconBg.BackgroundTransparency = 0.82
+    iconBg.BorderSizePixel = 0
+    iconBg.Size = UDim2.new(1, 0, 1, 0)
+    iconBg.ZIndex = 7
+    Instance.new("UICorner", iconBg).CornerRadius = UDim.new(1, 0)
+
+    if opts.loading then
+        makeSpinner(iconBg, 40, opts.iconColor or C.accent)
+    else
+        local glyph = Instance.new("TextLabel", iconBg)
+        glyph.BackgroundTransparency = 1
+        glyph.Size = UDim2.new(1, 0, 1, 0)
+        glyph.Font = Enum.Font.GothamBold
+        glyph.TextSize = 20
+        glyph.TextColor3 = opts.iconColor or C.textDim
+        glyph.Text = opts.icon or "!"
+        glyph.ZIndex = 9
+    end
+
+    local titleL = Instance.new("TextLabel", card)
+    titleL.BackgroundTransparency = 1
+    titleL.Size = UDim2.new(1, -32, 0, 18)
+    titleL.Position = UDim2.new(0, 16, 0, 66)
+    titleL.Font = Enum.Font.GothamBold
+    titleL.TextSize = 12
+    titleL.TextColor3 = opts.titleColor or C.text
+    titleL.Text = opts.title or "no models found"
+    titleL.ZIndex = 7
+
+    local subL = Instance.new("TextLabel", card)
+    subL.BackgroundTransparency = 1
+    subL.Size = UDim2.new(1, -32, 0, 14)
+    subL.Position = UDim2.new(0, 16, 0, 86)
+    subL.Font = Enum.Font.Gotham
+    subL.TextSize = 10
+    subL.TextColor3 = C.textMid
+    subL.Text = opts.subtitle or ""
+    subL.TextWrapped = true
+    subL.ZIndex = 7
+
+    if opts.actionText and opts.actionCb then
+        local btn = Instance.new("TextButton", card)
+        btn.BackgroundColor3 = opts.actionColor or C.accent
+        btn.BorderSizePixel = 0
+        btn.Size = UDim2.new(1, -32, 0, 28)
+        btn.Position = UDim2.new(0, 16, 1, -38)
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 11
+        btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        btn.Text = opts.actionText
+        btn.AutoButtonColor = false
+        btn.ZIndex = 7
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+        local bg = Instance.new("UIGradient", btn)
+        bg.Color = ColorSequence.new(opts.actionColor or C.accentHi, opts.actionColor or C.accent)
+        bg.Rotation = 90
+        local bs = Instance.new("UIStroke", btn)
+        bs.Color = Color3.fromRGB(255, 255, 255)
+        bs.Thickness = 1
+        bs.Transparency = 0.55
+
+        track(btn.MouseEnter:Connect(function()
+            tw(btn, {BackgroundTransparency = 0.15}, 0.16)
+            tweenService:Create(bs, TweenInfo.new(0.16), {Transparency = 0.35}):Play()
+        end))
+        track(btn.MouseLeave:Connect(function()
+            tw(btn, {BackgroundTransparency = 0}, 0.2)
+            tweenService:Create(bs, TweenInfo.new(0.2), {Transparency = 0.55}):Play()
+        end))
+        track(btn.MouseButton1Click:Connect(function()
+            if unloaded then return end
+            opts.actionCb()
+        end))
+    end
+
+    card.BackgroundTransparency = 1
+    grad.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    tweenNumSeq(grad, NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.88),
+        NumberSequenceKeypoint.new(1, 0.95),
+    }), 0.35)
+    st.Transparency = 1
+    tweenService:Create(st, TweenInfo.new(0.35, Enum.EasingStyle.Quart), {Transparency = 0.7}):Play()
+
+    return card
 end
 
 local function loadModelAsync(id, cb)
@@ -546,17 +780,8 @@ local function renderModels(list)
     clearModels()
     modelList = list or {}
     local frame = U.modelListFrame
-    if #modelList == 0 then
-        local l = Instance.new("TextLabel", frame)
-        l.BackgroundTransparency = 1
-        l.Size = UDim2.new(1, 0, 0, 26)
-        l.Font = Enum.Font.Gotham
-        l.TextSize = 11
-        l.TextColor3 = C.red
-        l.TextXAlignment = Enum.TextXAlignment.Left
-        l.Text = "no models found"
-        return
-    end
+    if #modelList == 0 then return end
+
     for i, entry in ipairs(modelList) do
         local id = entry.id
         local loaded = entry.loaded
@@ -670,6 +895,15 @@ local function renderModels(list)
                 end
             end)
         end))
+        b.BackgroundTransparency = 1
+        b.Position = UDim2.new(0, 8, 0, 0)
+        task.delay((i - 1) * 0.035, function()
+            if unloaded or not b.Parent then return end
+            tw(b, {
+                Position = UDim2.new(0, 0, 0, 0),
+                BackgroundTransparency = isActive and 0.78 or 0.88,
+            }, 0.34, Enum.EasingStyle.Quart)
+        end)
     end
 end
 
@@ -677,16 +911,32 @@ function fetchModels()
     if unloaded then return end
     setStatus("loading")
     if U.modelNameLabel then U.modelNameLabel.Text = "connecting..." end
+
+    buildEmptyState({
+        loading = true,
+        iconColor = C.accent,
+        title = "fetching models",
+        subtitle = "asking " .. providers[currentProviderIdx].name .. " for its model list...",
+        titleColor = C.text,
+    })
+
     task.spawn(function()
         local p = providers[currentProviderIdx]
         local list = {}
+        local err = nil
 
         if p.style == "openai" then
             local url = p.base .. "/v1/models"
             local h = {["Accept"]="application/json"}
             if p.needsKey and activeKey ~= "" then h["Authorization"] = "Bearer " .. activeKey end
             local ok, res = pcall(function() return http({Url=url, Method="GET", Headers=h}) end)
-            if ok and res and res.StatusCode == 200 then
+            if not ok or not res then
+                err = "couldn't reach server"
+            elseif res.StatusCode == 401 or res.StatusCode == 403 then
+                err = "api key rejected"
+            elseif res.StatusCode ~= 200 then
+                err = "server returned http " .. res.StatusCode
+            else
                 local okD, data = pcall(function() return httpService:JSONDecode(res.Body) end)
                 if okD and data and data.data then
                     for _, m in ipairs(data.data) do
@@ -696,22 +946,22 @@ function fetchModels()
             end
         elseif p.style == "gemini" then
             if activeKey == "" then
-                setStatus("fail", "need key")
-                U.modelNameLabel.Text = "enter api key"
-                U.modelHintLabel.Text = "paste your gemini key below"
-                U.modelHintLabel.TextColor3 = C.yellow
-                renderModels({})
-                return
-            end
-            local url = p.base .. "/v1beta/models?key=" .. activeKey
-            local ok, res = pcall(function() return http({Url=url, Method="GET"}) end)
-            if ok and res and res.StatusCode == 200 then
-                local okD, data = pcall(function() return httpService:JSONDecode(res.Body) end)
-                if okD and data and data.models then
-                    for _, m in ipairs(data.models) do
-                        if m.name then
-                            local id = m.name:gsub("^models/", "")
-                            table.insert(list, {id=id, loaded=true})
+                err = "no api key"
+            else
+                local url = p.base .. "/v1beta/models?key=" .. activeKey
+                local ok, res = pcall(function() return http({Url=url, Method="GET"}) end)
+                if not ok or not res then
+                    err = "couldn't reach server"
+                elseif res.StatusCode ~= 200 then
+                    err = "server returned http " .. res.StatusCode
+                else
+                    local okD, data = pcall(function() return httpService:JSONDecode(res.Body) end)
+                    if okD and data and data.models then
+                        for _, m in ipairs(data.models) do
+                            if m.name then
+                                local id = m.name:gsub("^models/", "")
+                                table.insert(list, {id=id, loaded=true})
+                            end
                         end
                     end
                 end
@@ -721,11 +971,63 @@ function fetchModels()
         if unloaded then return end
 
         if #list == 0 then
-            setStatus("fail", "no models")
-            U.modelNameLabel.Text = "connection failed"
-            U.modelHintLabel.Text = p.needsKey and "check api key + connection" or "check provider is running"
-            U.modelHintLabel.TextColor3 = C.red
-            renderModels({})
+            if p.id == "lmstudio" and err == "couldn't reach server" then
+                buildEmptyState({
+                    icon = "!",
+                    iconColor = C.red,
+                    title = "lm studio not running",
+                    subtitle = "start the lm studio server on port 1234 and try again",
+                    titleColor = C.red,
+                    actionText = "retry",
+                    actionColor = C.accent,
+                    actionCb = fetchModels,
+                })
+                setStatus("fail", "no server")
+                U.modelNameLabel.Text = "connection failed"
+                U.modelHintLabel.Text = "check lm studio on :1234"
+                U.modelHintLabel.TextColor3 = C.red
+            elseif p.needsKey and activeKey == "" then
+                buildEmptyState({
+                    icon = "?",
+                    iconColor = C.yellow,
+                    title = "api key required",
+                    subtitle = "paste your " .. p.name .. " key into the field above",
+                    titleColor = C.yellow,
+                    actionText = nil,
+                })
+                setStatus("fail", "need key")
+                U.modelNameLabel.Text = "enter api key"
+                U.modelHintLabel.Text = "paste your key above"
+                U.modelHintLabel.TextColor3 = C.yellow
+            elseif err == "api key rejected" then
+                buildEmptyState({
+                    icon = "!",
+                    iconColor = C.red,
+                    title = "api key rejected",
+                    subtitle = "the key you entered for " .. p.name .. " isn't valid",
+                    titleColor = C.red,
+                    actionText = nil,
+                })
+                setStatus("fail", "bad key")
+                U.modelNameLabel.Text = "auth failed"
+                U.modelHintLabel.Text = "check your api key"
+                U.modelHintLabel.TextColor3 = C.red
+            else
+                buildEmptyState({
+                    icon = "?",
+                    iconColor = C.yellow,
+                    title = "no models found",
+                    subtitle = err or ("nothing available from " .. p.name),
+                    titleColor = C.yellow,
+                    actionText = "retry",
+                    actionColor = C.accent,
+                    actionCb = fetchModels,
+                })
+                setStatus("fail", err or "no models")
+                U.modelNameLabel.Text = "no models"
+                U.modelHintLabel.Text = err or "try refreshing"
+                U.modelHintLabel.TextColor3 = C.yellow
+            end
             return
         end
 
@@ -996,7 +1298,7 @@ local function buildUI()
     subL.TextSize = 10
     subL.TextColor3 = C.textDim
     subL.TextXAlignment = Enum.TextXAlignment.Left
-    subL.Text = "lm studio bridge"
+    subL.Text = "way better then other people frrr"
     subL.ZIndex = 7
 
     local hRight = Instance.new("Frame", header)
